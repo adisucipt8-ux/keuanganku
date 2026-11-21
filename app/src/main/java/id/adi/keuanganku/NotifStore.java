@@ -58,13 +58,34 @@ public final class NotifStore {
         } catch (JSONException ignored) { }
     }
 
+    /**
+     * Dipantau bila dinyalakan di pengaturan, atau bila paketnya jelas milik Mandiri / GoPay / Gojek
+     * (nama paket bisa berbeda antar versi) dan tidak dimatikan secara khusus.
+     */
     public static boolean isWatched(Context c, String pkg) {
         JSONObject cfg = config(c);
         if (!cfg.optBoolean("enabled", true)) return false;
+        JSONArray off = cfg.optJSONArray("off");
+        if (off != null) for (int i = 0; i < off.length(); i++) if (pkg.equals(off.optString(i))) return false;
         JSONArray a = cfg.optJSONArray("pkgs");
-        if (a == null) return false;
-        for (int i = 0; i < a.length(); i++) if (pkg.equals(a.optString(i))) return true;
-        return false;
+        if (a != null) for (int i = 0; i < a.length(); i++) if (pkg.equals(a.optString(i))) return true;
+        return !"lain".equals(Parser.sourceOf(pkg));
+    }
+
+    public static void setConnected(Context c, long when) {
+        prefs(c).edit().putLong("connected", when).apply();
+    }
+
+    public static long lastConnected(Context c) {
+        return prefs(c).getLong("connected", 0);
+    }
+
+    public static void setLastSeen(Context c, long when) {
+        prefs(c).edit().putLong("lastSeen", when).apply();
+    }
+
+    public static long lastSeen(Context c) {
+        return prefs(c).getLong("lastSeen", 0);
     }
 
     // ---- aplikasi yang pernah mengirim notifikasi berisi nominal ----

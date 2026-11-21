@@ -19,6 +19,16 @@ import java.util.Locale;
 public class NotifService extends NotificationListenerService {
 
     @Override
+    public void onListenerConnected() {
+        NotifStore.setConnected(this, System.currentTimeMillis());
+        // ambil juga notifikasi yang masih ada di panel saat layanan (kembali) tersambung
+        try {
+            StatusBarNotification[] active = getActiveNotifications();
+            if (active != null) for (StatusBarNotification sbn : active) onNotificationPosted(sbn);
+        } catch (Throwable ignored) { }
+    }
+
+    @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
         try {
             handle(sbn);
@@ -34,6 +44,7 @@ public class NotifService extends NotificationListenerService {
         if (n == null || n.extras == null) return;
         if ((n.flags & Notification.FLAG_GROUP_SUMMARY) != 0) return;
 
+        NotifStore.setLastSeen(this, System.currentTimeMillis());
         Bundle e = n.extras;
         String title = str(e.getCharSequence(Notification.EXTRA_TITLE));
         String text = str(e.getCharSequence(Notification.EXTRA_TEXT));
@@ -51,9 +62,16 @@ public class NotifService extends NotificationListenerService {
 
         String label = appLabel(pkg);
         NotifStore.noteDetected(this, pkg, label);
-        if (!NotifStore.isWatched(this, pkg)) return;
+        boolean watched = NotifStore.isWatched(this, pkg);
+        String ll = label.toLowerCase(Locale.ROOT);
+        if (!watched && (ll.contains("gopay") || ll.contains("gojek") || ll.contains("livin") || ll.contains("mandiri"))) watched = true;
+        if (!watched) return;
 
         Parser.Result r = Parser.parse(pkg, title, bodyStr);
+        if (r != null && "lain".equals(r.source)) {
+            if (ll.contains("gopay") || ll.contains("gojek")) r.source = "gopay";
+            else if (ll.contains("livin") || ll.contains("mandiri")) r.source = "mandiri";
+        }
         long when = sbn.getPostTime() > 0 ? sbn.getPostTime() : System.currentTimeMillis();
 
         JSONObject log = new JSONObject();

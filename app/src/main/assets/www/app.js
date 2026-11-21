@@ -525,6 +525,10 @@ function shAuto() {
   const others = Object.keys(det).filter(p => !known.some(k => k.p === p)).map(p => ({p, n: det[p].label || p, c: '#8a98a8', d: det[p].count + ' notifikasi bernominal'}));
   const apps = known.concat(others);
   const pk = cfg.pkgs || [];
+  const off = cfg.off || [];
+  const isOn = p => !off.includes(p) && (pk.includes(p) || /gojek|gopay|bmri|mandiri|livin/.test(p));
+  const st = A && A.status ? safe(() => JSON.parse(A.status()), {}) : {};
+  const ago = ms => { if (!ms) return 'belum pernah'; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'baru saja' : m < 60 ? m + ' menit lalu' : m < 1440 ? Math.round(m / 60) + ' jam lalu' : Math.round(m / 1440) + ' hari lalu'; };
   const rv = D.tx.filter(t => t.review).map(t => ({...t})).concat(D.inc.filter(i => i.review).map(i => ({...i, _in: 1, t: i.t + 'T12:00'}))).sort((a, b) => a.t < b.t ? 1 : -1);
   const monthAuto = D.tx.filter(t => t.auto && String(t.t).slice(0, 7) === NOW_YM()).length;
 
@@ -533,10 +537,15 @@ function shAuto() {
     ${!A ? '<div class="note warn">Fitur ini hanya bekerja di aplikasi Android.</div>' :
       access ? `<div class="note blue"><b>Aktif.</b> Setiap notifikasi pembayaran dari aplikasi yang dinyalakan di bawah langsung tercatat. ${monthAuto} transaksi tercatat otomatis bulan ini.</div>`
       : `<div class="note warn"><b>Belum aktif.</b> Izinkan Keuanganku membaca notifikasi supaya pembayaran Livin' & GoPay tercatat sendiri. Teks notifikasi hanya dibaca di HP ini — aplikasi tidak punya akses internet.</div>
-         <button class="primary" data-act="openNotif" style="flex:none">Buka pengaturan akses notifikasi</button>`}
+         <button class="primary" data-act="openNotif" style="flex:none">1. Buka pengaturan akses notifikasi</button>
+         <div class="note blue"><b>Tombol Keuanganku abu-abu / muncul "Setelan dibatasi"?</b> Itu pengaman Android untuk aplikasi yang dipasang dari file APK. Buka <b>Info aplikasi</b> → ketuk <b>⋮</b> (pojok kanan atas) → <b>Izinkan setelan terbatas</b>, lalu ulangi langkah 1.</div>
+         <button class="ghost" data-act="appInfo">Buka Info aplikasi Keuanganku</button>`}
+    ${A && access ? `<div class="sum"><div><span>Layanan tersambung</span><b>${ago(st.connected)}</b></div><div><span>Notifikasi terakhir diterima</span><b>${ago(st.lastSeen)}</b></div></div>
+      ${!st.lastSeen || Date.now() - st.lastSeen > 6 * 3600e3 ? `<div class="note warn">Kalau pembayaran tidak tercatat, HP mungkin menghentikan Keuanganku di latar belakang. Set baterai Keuanganku ke <b>Tidak dibatasi</b>, lalu matikan-nyalakan lagi akses notifikasinya.</div>
+      <div class="btnrow"><button class="ghost" data-act="battery">Atur baterai</button><button class="ghost" data-act="openNotif">Akses notifikasi</button></div>` : ''}` : ''}
     ${A ? `<div>
       <label class="switch"><span class="m"><b>Catat otomatis</b><span class="muted">Matikan sementara tanpa mencabut izin</span></span><input type="checkbox" data-act="cfgOn" ${cfg.enabled !== false ? 'checked' : ''} aria-label="Catat otomatis"></label>
-      ${apps.map(a => `<label class="switch"><span class="dot" style="background:${a.c}"></span><span class="m"><b>${esc(a.n)}</b><span class="muted">${esc(a.d)}</span></span><input type="checkbox" data-act="cfgPkg" data-v="${esc(a.p)}" ${pk.includes(a.p) ? 'checked' : ''} aria-label="${esc(a.n)}"></label>`).join('')}
+      ${apps.map(a => `<label class="switch"><span class="dot" style="background:${a.c}"></span><span class="m"><b>${esc(a.n)}</b><span class="muted">${esc(a.d)}</span></span><input type="checkbox" data-act="cfgPkg" data-v="${esc(a.p)}" ${isOn(a.p) ? 'checked' : ''} aria-label="${esc(a.n)}"></label>`).join('')}
     </div>` : ''}
     <div>
       <div class="sec-h"><h2>Perlu dicek</h2><span class="muted">${rv.length} catatan</span></div>
@@ -1032,6 +1041,8 @@ document.addEventListener('click', e => {
     }
     case 'auto': openSheet('auto'); break;
     case 'openNotif': if (A) A.openNotifSettings(); break;
+    case 'appInfo': if (A && A.openAppInfo) A.openAppInfo(); break;
+    case 'battery': if (A && A.openBattery) A.openBattery(); break;
     case 'okAll': D.tx.forEach(t => { delete t.review; }); D.inc.forEach(i => { delete i.review; }); save(); renderSheet(); toast('Semua ditandai benar'); break;
     case 'clearLog': if (A) A.clearLog(); renderSheet(); break;
     case 'testParse': {
@@ -1060,7 +1071,11 @@ document.addEventListener('change', e => {
   const t = e.target;
   const act = t.dataset ? t.dataset.act : '';
   if (act === 'cfgOn') setCfg(c => { c.enabled = t.checked; });
-  else if (act === 'cfgPkg') setCfg(c => { const s = new Set(c.pkgs || []); if (t.checked) s.add(t.dataset.v); else s.delete(t.dataset.v); c.pkgs = [...s]; });
+  else if (act === 'cfgPkg') setCfg(c => {
+    const s = new Set(c.pkgs || []), o = new Set(c.off || []), p = t.dataset.v;
+    if (t.checked) { s.add(p); o.delete(p); } else { s.delete(p); o.add(p); }
+    c.pkgs = [...s]; c.off = [...o];
+  });
   else if (act === 'impOn') { const r = S.imp.rows[+t.dataset.i]; if (r) { r.on = t.checked; renderSheet(); } }
   else if (act === 'impInc') { S.imp.opts.inc = t.checked; renderSheet(); }
   else if (act === 'impSrc') { S.imp.src = t.value; S.imp.rows.forEach(r => { r.src = t.value; }); renderSheet(); }

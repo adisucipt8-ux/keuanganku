@@ -127,6 +127,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // beberapa HP mematikan layanan pembaca notifikasi di latar belakang; minta disambung ulang
+        try {
+            if (hasNotifAccess()) {
+                android.service.notification.NotificationListenerService.requestRebind(new ComponentName(this, NotifService.class));
+            }
+        } catch (Throwable ignored) { }
         if (web != null) js("window.nativeResume&&nativeResume()");
     }
 
@@ -236,6 +242,40 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 return "";
             }
+        }
+
+        @JavascriptInterface public String status() {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("connected", NotifStore.lastConnected(ctx));
+                o.put("lastSeen", NotifStore.lastSeen(ctx));
+                o.put("sdk", Build.VERSION.SDK_INT);
+                o.put("maker", Build.MANUFACTURER);
+                return o.toString();
+            } catch (org.json.JSONException e) {
+                return "{}";
+            }
+        }
+
+        @JavascriptInterface public void openAppInfo() {
+            runOnUiThread(() -> {
+                try {
+                    Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName()));
+                    startActivity(i);
+                } catch (Exception e) {
+                    startActivity(new Intent(Settings.ACTION_SETTINGS));
+                }
+            });
+        }
+
+        @JavascriptInterface public void openBattery() {
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                } catch (Exception e) {
+                    openAppInfo();
+                }
+            });
         }
 
         @JavascriptInterface public void openNotifSettings() {
