@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>Keuanganku</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main id="view" aria-live="polite"></main>
+
+<div class="fabs" id="fabs"></div>
+
+<nav class="tabs" aria-label="Navigasi utama">
+  <button data-act="tab" data-v="home" id="t-home"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg></span>Beranda</button>
+  <button data-act="tab" data-v="hist" id="t-hist"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>Riwayat</button>
+  <button data-act="tab" data-v="gaji" id="t-gaji"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18M16 15h2"/></svg></span>Gaji</button>
+  <button data-act="tab" data-v="lap" id="t-lap"><span class="ti"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V11M10 20V5M16 20v-7M2 20h20"/></svg></span>Laporan</button>
+</nav>
+
+<div class="ov" id="sheet" hidden><div class="sheet" id="sheetBody" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" hidden></div>
+<div id="print"></div>
+<input type="file" id="fileImport" accept=".xlsx,.xls,.csv,.pdf" multiple hidden>
+<input type="file" id="fileRestore" accept=".json,application/json" hidden>
+
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/pdf.worker.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
