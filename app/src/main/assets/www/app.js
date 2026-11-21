@@ -58,9 +58,24 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const sum = (a, f) => a.reduce((s, x) => s + (+(f ? f(x) : x.amt) || 0), 0);
 const toLocal = ms => { const d = new Date(ms); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };
 const nowLocal = () => toLocal(Date.now());
-const NOW_YM = () => nowLocal().slice(0, 7);
+/* Periode bulanan: dengan tanggal mulai 26, transaksi 26 Okt – 25 Nov masuk periode "November". */
+const startDay = () => Math.min(28, Math.max(1, (typeof D !== 'undefined' && D && +D.startDay) || 1));
+const per = t => {
+  const s = String(t || '');
+  const sd = startDay();
+  if (sd <= 1 || s.length < 10) return s.slice(0, 7);
+  return +s.slice(8, 10) >= sd ? ymAdd(s.slice(0, 7), 1) : s.slice(0, 7);
+};
+const NOW_YM = () => per(nowLocal());
 const ymAdd = (ym, k) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + k, 1); return d.getFullYear() + '-' + pad(d.getMonth() + 1); };
-const ymLabel = ym => { const [y, m] = ym.split('-').map(Number); return BULAN[m - 1] + ' ' + y; };
+const ymLabel = (ym, short) => {
+  const [y, m] = ym.split('-').map(Number);
+  const sd = startDay();
+  if (sd <= 1) return BULAN[m - 1] + ' ' + y;
+  const p = ymAdd(ym, -1), pm = +p.slice(5, 7), py = +p.slice(0, 4);
+  const yr = short && y === new Date().getFullYear() ? '' : ' ' + y;
+  return sd + ' ' + BULAN[pm - 1].slice(0, 3) + (py !== y && !short ? ' ' + py : '') + ' – ' + (sd - 1) + ' ' + BULAN[m - 1].slice(0, 3) + yr;
+};
 const ymShort = ym => BULAN[+ym.slice(5, 7) - 1].slice(0, 3);
 const srcOf = id => SRC.find(s => s.id === id) || SRC[4];
 const catOf = id => CAT.find(c => c.id === id) || CAT[7];
@@ -72,8 +87,8 @@ let D = load();
 function load() {
   try {
     const o = JSON.parse(localStorage.getItem(KEY) || '{}');
-    return {tx: Array.isArray(o.tx) ? o.tx : [], inc: Array.isArray(o.inc) ? o.inc : [], budget: +o.budget || 0, v: 1};
-  } catch (e) { return {tx: [], inc: [], budget: 0, v: 1}; }
+    return {tx: Array.isArray(o.tx) ? o.tx : [], inc: Array.isArray(o.inc) ? o.inc : [], budget: +o.budget || 0, startDay: +o.startDay || 1, v: 1};
+  } catch (e) { return {tx: [], inc: [], budget: 0, startDay: 1, v: 1}; }
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(D)); return true; }
@@ -101,8 +116,8 @@ function guessInc(text) {
 const isTopup = s => /top ?-?up|isi saldo|isi ulang saldo/i.test(String(s || ''));
 
 function monthData(ym) {
-  const tx = D.tx.filter(t => String(t.t).slice(0, 7) === ym);
-  const inc = D.inc.filter(i => String(i.t).slice(0, 7) === ym);
+  const tx = D.tx.filter(t => per(t.t) === ym);
+  const inc = D.inc.filter(i => per(i.t) === ym);
   const out = sum(tx), masuk = sum(inc);
   return {tx, inc, out, masuk, sisa: masuk - out};
 }
@@ -178,7 +193,7 @@ function statusBar() {
 }
 function mnav(light) {
   const next = S.ym >= NOW_YM();
-  return `<div class="mnav"><button class="ib" data-act="prevM" aria-label="Bulan sebelumnya">${ICON.left}</button><b>${ymLabel(S.ym)}</b><button class="ib" data-act="nextM" aria-label="Bulan berikutnya" ${next ? 'disabled' : ''}>${ICON.right}</button></div>`;
+  return `<div class="mnav"><button class="ib" data-act="prevM" aria-label="Bulan sebelumnya">${ICON.left}</button><b>${ymLabel(S.ym, true)}</b><button class="ib" data-act="nextM" aria-label="Bulan berikutnya" ${next ? 'disabled' : ''}>${ICON.right}</button></div>`;
 }
 
 /* ---------- Beranda ---------- */
@@ -216,7 +231,7 @@ function vHome() {
     <div class="row between"><h1>Keuanganku</h1>${mnav()}</div>
     <div class="hero">
       <div style="display:flex;flex-direction:column;gap:2px">
-        <span style="font-size:14px;font-weight:500">${over ? 'Minus bulan ini' : 'Sisa uang bulan ini'}</span>
+        <span style="font-size:14px;font-weight:500">${(over ? 'Minus ' : 'Sisa uang ') + (startDay() > 1 ? 'periode ini' : 'bulan ini')}</span>
         <span class="big">${rpS(M.sisa)}</span>
         <span style="font-size:14px">${M.masuk > 0 ? (over ? 'Pengeluaran melebihi pemasukan' : pct(M.sisa, M.masuk) + '% dari total pemasukan') : 'Belum ada pemasukan tercatat'}</span>
       </div>
@@ -270,7 +285,7 @@ function vHist() {
     L = D.tx.filter(t => (t.m + ' ' + (t.note || '') + ' ' + catOf(t.cat).n + ' ' + srcOf(t.src).n).toLowerCase().includes(q))
       .concat(incAll.filter(i => ((i.note || '') + ' ' + incOf(i.type).n + ' ' + (i.tujuan || '')).toLowerCase().includes(q)));
   } else {
-    L = D.tx.filter(t => String(t.t).slice(0, 7) === S.ym).concat(incAll.filter(i => i.t.slice(0, 7) === S.ym));
+    L = D.tx.filter(t => per(t.t) === S.ym).concat(incAll.filter(i => per(i.t) === S.ym));
   }
   if (S.f === 'in') L = L.filter(x => x._in);
   else if (S.f === 'review') L = L.filter(x => x.review);
@@ -332,7 +347,7 @@ function vGaji() {
     ${bar('Sisa', M.sisa, pct(M.sisa, M.masuk), 'var(--ink)')}
   </section>
   <section class="sec" style="gap:0">
-    <h2 style="margin-bottom:4px">Pemasukan ${BULAN[+S.ym.slice(5, 7) - 1]}</h2>
+    <h2 style="margin-bottom:4px">Pemasukan ${startDay() > 1 ? 'periode ini' : BULAN[+S.ym.slice(5, 7) - 1]}</h2>
     ${entries.length ? entries.map(i => itemHTML({...i, _in: 1})).join('') : `<div class="empty" style="margin-top:6px">Belum ada. Ketuk <b>Tambah pemasukan</b> untuk mencatat gaji pokok, lembur, atau SPPD.</div>`}
   </section>
   <section class="sec">
@@ -381,6 +396,11 @@ function vLap() {
       <button class="ghost" data-act="restore">Pulihkan cadangan</button>
     </div>
     <p class="muted" style="margin:0">Excel berisi semua pengeluaran, pemasukan, dan rekap bulanan. Cadangan (.json) dipakai untuk memindahkan data ke HP baru.</p>
+  </section>
+  <section class="sec">
+    <h2>Periode bulanan</h2>
+    <label class="fld"><span class="lbl">Satu bulan dihitung mulai tanggal</span><select id="startDay">${Array.from({length: 28}, (_, i) => i + 1).map(d => `<option value="${d}" ${startDay() === d ? 'selected' : ''}>${d === 1 ? '1 (bulan kalender)' : d + ' s.d. ' + (d - 1) + ' bulan berikutnya'}</option>`).join('')}</select></label>
+    <p class="muted" style="margin:0">${startDay() > 1 ? `Contoh: periode <b>${BULAN[+NOW_YM().slice(5, 7) - 1]}</b> = ${esc(ymLabel(ymAdd(NOW_YM(), 0)).replace(/ \d{4}$/, ''))}. Periode diberi nama bulan tanggal akhirnya.` : 'Cocok kalau gajimu masuk di awal bulan. Ganti ke 26 kalau satu periodemu 26 – 25.'}</p>
   </section>
   <section class="sec">
     <h2>Anggaran belanja per bulan</h2>
@@ -448,7 +468,7 @@ function saveTx() {
   const i = D.tx.findIndex(x => x.id === rec.id);
   if (i >= 0) D.tx[i] = rec; else D.tx.push(rec);
   if (save()) {
-    const ymNew = rec.t.slice(0, 7);
+    const ymNew = per(rec.t);
     if (ymNew <= NOW_YM()) S.ym = ymNew;
     closeSheet(); toast(e.id ? 'Perubahan tersimpan' : 'Tercatat ' + rp(rec.amt));
   }
@@ -462,7 +482,7 @@ function openInc(rec, preset) {
 }
 function shInc() {
   const e = S.inc;
-  const M = monthData(String(e.t).slice(0, 7) || S.ym);
+  const M = monthData(per(e.t) || S.ym);
   const old = e.id ? (D.inc.find(i => i.id === e.id) || {}).amt || 0 : 0;
   const after = M.masuk - old + (num(e.amt) || 0);
   return `${shHead(e.id ? 'Ubah pemasukan' : 'Tambah pemasukan')}
@@ -478,7 +498,7 @@ function shInc() {
     </div>
     <label class="fld"><span class="lbl">Keterangan</span><input id="iNote" value="${esc(e.note || '')}" placeholder="Opsional"></label>
     ${e.raw ? `<div><span class="lbl">Teks notifikasi asli</span><div class="raw">${esc(e.raw)}</div></div>` : ''}
-    <div class="note" id="iAfter">Setelah disimpan, total pemasukan ${BULAN[+String(e.t).slice(5, 7) - 1] || ''} jadi <b>${rp(after)}</b></div>
+    <div class="note" id="iAfter">Setelah disimpan, total pemasukan ${esc(ymLabel(per(e.t) || S.ym))} jadi <b>${rp(after)}</b></div>
     <p class="err" id="iErr"></p>
   </form>
   <div class="sh-f">${e.id ? '<button class="sec-btn" data-act="delInc" style="color:#c2410c">Hapus</button>' : '<button class="sec-btn" data-act="close">Batal</button>'}<button class="primary t" data-act="saveInc">Simpan</button></div>`;
@@ -503,7 +523,7 @@ function saveInc() {
   const i = D.inc.findIndex(x => x.id === rec.id);
   if (i >= 0) D.inc[i] = rec; else D.inc.push(rec);
   if (save()) {
-    if (rec.t.slice(0, 7) <= NOW_YM()) S.ym = rec.t.slice(0, 7);
+    if (per(rec.t) <= NOW_YM()) S.ym = per(rec.t);
     closeSheet(); toast(incOf(rec.type).n + ' ' + rp(rec.amt) + ' tersimpan');
   }
 }
@@ -530,7 +550,7 @@ function shAuto() {
   const st = A && A.status ? safe(() => JSON.parse(A.status()), {}) : {};
   const ago = ms => { if (!ms) return 'belum pernah'; const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'baru saja' : m < 60 ? m + ' menit lalu' : m < 1440 ? Math.round(m / 60) + ' jam lalu' : Math.round(m / 1440) + ' hari lalu'; };
   const rv = D.tx.filter(t => t.review).map(t => ({...t})).concat(D.inc.filter(i => i.review).map(i => ({...i, _in: 1, t: i.t + 'T12:00'}))).sort((a, b) => a.t < b.t ? 1 : -1);
-  const monthAuto = D.tx.filter(t => t.auto && String(t.t).slice(0, 7) === NOW_YM()).length;
+  const monthAuto = D.tx.filter(t => t.auto && per(t.t) === NOW_YM()).length;
 
   return `${shHead('Catat otomatis')}
   <div class="sh-b">
@@ -912,7 +932,7 @@ function exportXlsx() {
   if (!window.XLSX) { toast('Pembuat Excel tidak tersedia'); return; }
   const tx = D.tx.slice().sort((a, b) => a.t < b.t ? -1 : 1).map(t => ({Tanggal: t.t.slice(0, 10), Jam: t.t.slice(11, 16), Nominal: t.amt, Sumber: srcOf(t.src).n, Kategori: catOf(t.cat).n, Merchant: t.m, Catatan: t.note || ''}));
   const inc = D.inc.slice().sort((a, b) => a.t < b.t ? -1 : 1).map(i => ({Tanggal: i.t.slice(0, 10), Jenis: incOf(i.type).n, Nominal: i.amt, 'Masuk ke': i.to || '', Keterangan: i.note || '', 'Jam lembur': i.jam || '', 'Tujuan SPPD': i.tujuan || '', 'Lama SPPD (hari)': i.hari || ''}));
-  const yms = [...new Set(D.tx.map(t => t.t.slice(0, 7)).concat(D.inc.map(i => i.t.slice(0, 7))))].sort();
+  const yms = [...new Set(D.tx.map(t => per(t.t)).concat(D.inc.map(i => per(i.t))))].sort();
   const rek = yms.map(ym => {
     const M = monthData(ym);
     const by = id => sum(M.inc.filter(i => incOf(i.type).id === id));
@@ -952,7 +972,7 @@ function downloadTemplate() {
   saveB64('Template-Keuanganku.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', XLSX.write(wb, {type: 'base64', bookType: 'xlsx'}));
 }
 function backup() {
-  const json = JSON.stringify({app: 'keuanganku', v: 1, exported: new Date().toISOString(), tx: D.tx, inc: D.inc, budget: D.budget});
+  const json = JSON.stringify({app: 'keuanganku', v: 1, exported: new Date().toISOString(), tx: D.tx, inc: D.inc, budget: D.budget, startDay: D.startDay});
   saveB64('Keuanganku-cadangan-' + nowLocal().slice(0, 10) + '.json', 'application/json', btoa(unescape(encodeURIComponent(json))));
 }
 function saveB64(name, mime, b64) {
@@ -1083,6 +1103,7 @@ document.addEventListener('change', e => {
     const fi = +t.dataset.file, f = S.imp.files[fi];
     if (f && f.headers) { f.map[t.dataset.map] = +t.value; f.rows = rowsFromSheet(f, S.imp.src); f.info = 'Sheet “' + f.sheet + '” · ' + f.rows.length + (f.incSheet ? ' pemasukan' : ' transaksi'); S.imp.mapOpen = fi; rebuildImportRows(); renderSheet(); }
   }
+  else if (t.id === 'startDay') { D.startDay = +t.value || 1; save(); S.ym = NOW_YM(); render(); toast(D.startDay > 1 ? 'Periode: tanggal ' + D.startDay + ' s.d. ' + (D.startDay - 1) : 'Periode: bulan kalender'); }
   else if (t.id === 'budget') { D.budget = num(t.value); save(); toast(D.budget ? 'Anggaran disimpan' : 'Anggaran dihapus'); }
   else if (t.id === 'fM' && S.edit && !S.edit.cat) {
     const g = guessCat(t.value);
@@ -1091,7 +1112,7 @@ document.addEventListener('change', e => {
   else if (t.id === 'fileImport') { const fs = [...t.files]; if (fs.length) handleImportFiles(fs); }
   else if (t.id === 'fileRestore') { const f = t.files[0]; if (f) restore(f); }
   else if (t.id === 'iT' && S.inc) {
-    const M = monthData(String(t.value || S.inc.t).slice(0, 7));
+    const M = monthData(per(t.value || S.inc.t));
     const old = S.inc.id ? (D.inc.find(i => i.id === S.inc.id) || {}).amt || 0 : 0;
     const el = $('#iAfter b'); if (el) el.textContent = rp(M.masuk - old + num(($('#iAmt') || {}).value));
   }
@@ -1111,7 +1132,7 @@ document.addEventListener('input', e => {
     }, 300);
   }
   if (t.id === 'iAmt' && S.inc) {
-    const e2 = S.inc; const M = monthData(String(($('#iT') || {}).value || e2.t).slice(0, 7));
+    const e2 = S.inc; const M = monthData(per(($('#iT') || {}).value || e2.t));
     const old = e2.id ? (D.inc.find(i => i.id === e2.id) || {}).amt || 0 : 0;
     const el = $('#iAfter b'); if (el) el.textContent = rp(M.masuk - old + num(t.value));
   }
