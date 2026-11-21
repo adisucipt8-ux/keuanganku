@@ -573,7 +573,8 @@ function shImport() {
       ${fileList}
       <button class="drop" data-act="pickFiles" ${I.step === 'busy' ? 'disabled' : ''}>${I.step === 'busy' ? 'Membaca file…' : '+ Pilih file'}</button>
       ${I.msg ? `<div class="note warn">${esc(I.msg)}</div>` : ''}
-      <div class="note blue">Tips: di Livin', unduh e-statement dari menu Rekening → e-Statement. Excel lama milikmu juga bisa — kolom tanggal, keterangan, dan nominal dikenali otomatis.</div>`;
+      <div class="note blue"><b>Belum punya file?</b> Unduh template Excel, isi data lamamu (di HP atau laptop), lalu impor di sini. Excel lama milikmu sendiri atau e-statement juga bisa — kolom tanggal, keterangan, dan nominal dikenali otomatis.</div>
+      <button class="ghost" data-act="template">Unduh template Excel</button>`;
     return `${shHead('Impor data lama')}<div class="sh-b">${body}</div><div style="height:24px"></div>`;
   }
   if (I.step === 'done') {
@@ -653,8 +654,13 @@ function parseAmt(v) {
   return {v: n || 0, neg};
 }
 function autoMap(headers) {
-  const map = {date: -1, time: -1, desc: -1, debit: -1, credit: -1, amount: -1, cat: -1, src: -1};
+  const map = {date: -1, time: -1, desc: -1, debit: -1, credit: -1, amount: -1, cat: -1, src: -1, type: -1, jam: -1, tujuan: -1, hari: -1, to: -1};
   const tests = [
+    ['type', /^(jenis|jenis pemasukan|tipe|type)$/],
+    ['jam', /jam lembur/],
+    ['tujuan', /tujuan/],
+    ['hari', /lama.*hari|^hari$|lama sppd/],
+    ['to', /^masuk ke$/],
     ['date', /^(tanggal|tgl|date|tanggal transaksi|transaction date|posting date|tgl\.? transaksi|waktu transaksi|waktu|tanggal & waktu)/],
     ['time', /^(jam|time|pukul)$/],
     ['debit', /(debet|debit|keluar|pengeluaran|withdraw|dana keluar|uang keluar)/],
@@ -688,6 +694,17 @@ function rowsFromSheet(f, src) {
     let kind = 'out', amt = 0;
     const db = mp.debit >= 0 ? parseAmt(r[mp.debit]).v : 0;
     const cr = mp.credit >= 0 ? parseAmt(r[mp.credit]).v : 0;
+    if (f.incSheet) {
+      amt = mp.amount >= 0 ? parseAmt(r[mp.amount]).v : (cr || db);
+      if (!(amt > 0)) return;
+      const js = mp.type >= 0 ? String(r[mp.type] || '').toLowerCase() : '';
+      const inc = INC.find(c => js && (js.includes(c.s.toLowerCase()) || js.includes(c.n.toLowerCase()))) ;
+      const row = mkRow(t, amt, 'in', desc, '', src);
+      row.type = inc ? inc.id : guessInc(js + ' ' + desc);
+      row.extra = {jam: mp.jam >= 0 ? +r[mp.jam] || 0 : 0, tujuan: mp.tujuan >= 0 ? String(r[mp.tujuan] || '').trim() : '', hari: mp.hari >= 0 ? +r[mp.hari] || 0 : 0, to: mp.to >= 0 ? String(r[mp.to] || '').trim() : ''};
+      out.push(row);
+      return;
+    }
     if (db > 0) { amt = db; kind = 'out'; }
     else if (cr > 0) { amt = cr; kind = 'in'; }
     else if (mp.amount >= 0) { const a = parseAmt(r[mp.amount]); amt = a.v; kind = a.neg ? 'out' : 'out'; if (!a.neg && /\b(cr|kr|kredit|masuk)\b/i.test(desc)) kind = 'in'; }
@@ -802,8 +819,9 @@ async function handleImportFiles(files) {
           const buf = await file.arrayBuffer();
           wb = XLSX.read(new Uint8Array(buf), {type: 'array', cellDates: true});
         }
-        let best = null;
+        const found = [];
         wb.SheetNames.forEach(sn => {
+          if (/petunjuk|panduan|cara|rekap/i.test(sn)) return;
           const aoa = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header: 1, raw: true, defval: ''});
           let hi = -1, score = 0;
           for (let i = 0; i < Math.min(25, aoa.length); i++) {
@@ -811,18 +829,24 @@ async function handleImportFiles(files) {
             const sc = (mp.date >= 0 ? 2 : 0) + (mp.amount >= 0 || mp.debit >= 0 || mp.credit >= 0 ? 2 : 0) + (mp.desc >= 0 ? 1 : 0);
             if (sc > score) { score = sc; hi = i; }
           }
-          if (hi >= 0 && (!best || score > best.score)) best = {sn, aoa, hi, score};
+          if (hi >= 0 && score >= 4) found.push({sn, aoa, hi});
         });
-        if (!best || best.score < 4) {
+        if (!found.length) {
           I.files.push({name, ext, kind: 'sheet', info: 'Kolom tanggal/nominal tidak ditemukan', rows: []});
-          I.msg = 'Kolom tanggal dan nominal di ' + name + ' tidak ditemukan. Pastikan ada baris judul seperti “Tanggal”, “Keterangan”, “Nominal”.';
-        } else {
-          const headers = (best.aoa[best.hi] || []).map(h => String(h == null ? '' : h).trim());
-          const f = {name, ext, kind: 'sheet', headers, map: autoMap(headers), data: best.aoa.slice(best.hi + 1), sheet: best.sn};
-          f.rows = rowsFromSheet(f, I.src);
-          f.info = 'Sheet “' + best.sn + '” · ' + f.rows.length + ' transaksi';
-          I.files.push(f);
+          I.msg = 'Kolom tanggal dan nominal di ' + name + ' tidak ditemukan. Pastikan ada baris judul seperti “Tanggal”, “Keterangan”, “Nominal” — atau pakai template Excel di bawah.';
         }
+        let total = 0;
+        found.forEach(b => {
+          const headers = (b.aoa[b.hi] || []).map(h => String(h == null ? '' : h).trim());
+          const map = autoMap(headers);
+          const incSheet = /masuk|pemasukan|gaji|income/i.test(b.sn) || map.type >= 0;
+          const f = {name: found.length > 1 ? name + ' · ' + b.sn : name, ext, kind: 'sheet', headers, map, incSheet, data: b.aoa.slice(b.hi + 1), sheet: b.sn};
+          f.rows = rowsFromSheet(f, I.src);
+          f.info = 'Sheet “' + b.sn + '” · ' + f.rows.length + (incSheet ? ' pemasukan' : ' transaksi');
+          total += f.rows.length;
+          I.files.push(f);
+        });
+        if (found.length && !total) I.msg = name + ' tidak berisi transaksi — hanya judul kolom. Kalau ini hasil ekspor saat aplikasi masih kosong, memang belum ada datanya.';
       }
     } catch (e) {
       I.files.push({name, ext, kind: ext === 'pdf' ? 'pdf' : 'sheet', info: 'Gagal dibaca', rows: []});
@@ -860,7 +884,11 @@ function doImport() {
     if (!r.on || r.dup) return;
     if (r.kind === 'in') {
       if (!I.opts.inc) return;
-      D.inc.push({id: uid(), type: r.type || 'lain', amt: r.amt, t: r.t.slice(0, 10), note: r.m, to: srcOf(I.src).s, imp: 1, at: Date.now()});
+      const x = r.extra || {};
+      const rec = {id: uid(), type: r.type || 'lain', amt: r.amt, t: r.t.slice(0, 10), note: r.m, to: x.to || srcOf(I.src).s, imp: 1, at: Date.now()};
+      if (rec.type === 'lembur' && x.jam) rec.jam = x.jam;
+      if (rec.type === 'sppd') { if (x.tujuan) rec.tujuan = x.tujuan; if (x.hari) rec.hari = x.hari; }
+      D.inc.push(rec);
       nInc++;
     } else {
       D.tx.push({id: uid(), amt: r.amt, src: r.src || I.src || 'lain', cat: r.cat || 'lain', m: r.m || 'Tanpa nama', t: r.t, note: '', imp: 1, at: Date.now()});
@@ -882,11 +910,37 @@ function exportXlsx() {
     return {Bulan: ymLabel(ym), 'Total masuk': M.masuk, 'Gaji pokok': by('pokok'), Lembur: by('lembur'), SPPD: by('sppd'), 'Pemasukan lain': by('lain'), 'Total keluar': M.out, Sisa: M.sisa, '% sisa': M.masuk ? +(M.sisa / M.masuk * 100).toFixed(1) : ''};
   });
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rek.length ? rek : [{Bulan: ''}]), 'Rekap bulanan');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(tx.length ? tx : [{Tanggal: ''}]), 'Pengeluaran');
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(inc.length ? inc : [{Tanggal: ''}]), 'Pemasukan');
+  const sheet = (rows, headers) => XLSX.utils.json_to_sheet(rows, {header: headers});
+  XLSX.utils.book_append_sheet(wb, sheet(rek, ['Bulan', 'Total masuk', 'Gaji pokok', 'Lembur', 'SPPD', 'Pemasukan lain', 'Total keluar', 'Sisa', '% sisa']), 'Rekap bulanan');
+  XLSX.utils.book_append_sheet(wb, sheet(tx, ['Tanggal', 'Jam', 'Nominal', 'Sumber', 'Kategori', 'Merchant', 'Catatan']), 'Pengeluaran');
+  XLSX.utils.book_append_sheet(wb, sheet(inc, ['Tanggal', 'Jenis', 'Nominal', 'Masuk ke', 'Keterangan', 'Jam lembur', 'Tujuan SPPD', 'Lama SPPD (hari)']), 'Pemasukan');
   const b64 = XLSX.write(wb, {type: 'base64', bookType: 'xlsx'});
   saveB64('Keuanganku-' + nowLocal().slice(0, 10) + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', b64);
+}
+function downloadTemplate() {
+  if (!window.XLSX) { toast('Pembuat Excel tidak tersedia'); return; }
+  const wb = XLSX.utils.book_new();
+  const out = XLSX.utils.aoa_to_sheet([['Tanggal', 'Jam', 'Nominal', 'Sumber', 'Kategori', 'Merchant', 'Catatan']]);
+  out['!cols'] = [{wch: 12}, {wch: 7}, {wch: 12}, {wch: 14}, {wch: 18}, {wch: 26}, {wch: 20}];
+  const inc = XLSX.utils.aoa_to_sheet([['Tanggal', 'Jenis', 'Nominal', 'Keterangan', 'Jam lembur', 'Tujuan SPPD', 'Lama SPPD (hari)']]);
+  inc['!cols'] = [{wch: 12}, {wch: 14}, {wch: 12}, {wch: 24}, {wch: 11}, {wch: 14}, {wch: 16}];
+  const help = XLSX.utils.aoa_to_sheet([
+    ['Cara mengisi template Keuanganku'],
+    [''],
+    ['1. Sheet "Pengeluaran": satu baris per pembayaran. Wajib: Tanggal dan Nominal. Lainnya boleh kosong.'],
+    ['2. Sheet "Pemasukan": satu baris per uang masuk. Jenis diisi: Pokok, Lembur, SPPD, atau Lainnya.'],
+    ['3. Tanggal ditulis seperti 21/11/2025 atau 21 Nov 2025. Nominal cukup angka, misal 25000 atau 25.000.'],
+    ['4. Sumber: Mandiri, GoPay, Transfer, Tunai, atau Lainnya. Kategori: ' + CAT.map(c => c.n).join(', ') + '.'],
+    ['5. Simpan, lalu di aplikasi: Riwayat → Impor data lama → Pilih file.'],
+    [''],
+    ['Contoh baris Pengeluaran:', '21/11/2025', '08:14', 25000, 'GoPay', 'Makan & minum', 'Kopi Kenangan'],
+    ['Contoh baris Pemasukan:', '25/11/2025', 'Lembur', 450000, 'Lembur 15 Nov', 6]
+  ]);
+  help['!cols'] = [{wch: 30}, {wch: 12}, {wch: 10}, {wch: 10}, {wch: 10}, {wch: 16}, {wch: 16}];
+  XLSX.utils.book_append_sheet(wb, out, 'Pengeluaran');
+  XLSX.utils.book_append_sheet(wb, inc, 'Pemasukan');
+  XLSX.utils.book_append_sheet(wb, help, 'Petunjuk');
+  saveB64('Template-Keuanganku.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', XLSX.write(wb, {type: 'base64', bookType: 'xlsx'}));
 }
 function backup() {
   const json = JSON.stringify({app: 'keuanganku', v: 1, exported: new Date().toISOString(), tx: D.tx, inc: D.inc, budget: D.budget});
@@ -996,6 +1050,7 @@ document.addEventListener('click', e => {
     }
     case 'doImport': doImport(); break;
     case 'xlsx': exportXlsx(); break;
+    case 'template': downloadTemplate(); break;
     case 'pdf': printReport(); break;
     case 'backup': backup(); break;
     case 'restore': $('#fileRestore').value = ''; $('#fileRestore').click(); break;
@@ -1011,13 +1066,20 @@ document.addEventListener('change', e => {
   else if (act === 'impSrc') { S.imp.src = t.value; S.imp.rows.forEach(r => { r.src = t.value; }); renderSheet(); }
   else if (t.dataset && t.dataset.map) {
     const fi = +t.dataset.file, f = S.imp.files[fi];
-    if (f && f.headers) { f.map[t.dataset.map] = +t.value; f.rows = rowsFromSheet(f, S.imp.src); f.info = 'Sheet “' + f.sheet + '” · ' + f.rows.length + ' transaksi'; S.imp.mapOpen = fi; rebuildImportRows(); renderSheet(); }
+    if (f && f.headers) { f.map[t.dataset.map] = +t.value; f.rows = rowsFromSheet(f, S.imp.src); f.info = 'Sheet “' + f.sheet + '” · ' + f.rows.length + (f.incSheet ? ' pemasukan' : ' transaksi'); S.imp.mapOpen = fi; rebuildImportRows(); renderSheet(); }
   }
   else if (t.id === 'budget') { D.budget = num(t.value); save(); toast(D.budget ? 'Anggaran disimpan' : 'Anggaran dihapus'); }
-  else if (t.id === 'fM' && S.edit && !S.edit.cat) { const g = guessCat(t.value); if (g) { readTxForm(); S.edit.cat = g; renderSheet(); } }
+  else if (t.id === 'fM' && S.edit && !S.edit.cat) {
+    const g = guessCat(t.value);
+    if (g) { S.edit.cat = g; document.querySelectorAll('[data-act=pickCat]').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.v === g))); }
+  }
   else if (t.id === 'fileImport') { const fs = [...t.files]; if (fs.length) handleImportFiles(fs); }
   else if (t.id === 'fileRestore') { const f = t.files[0]; if (f) restore(f); }
-  else if (t.id === 'iT' && S.inc) { readIncForm(); renderSheet(); }
+  else if (t.id === 'iT' && S.inc) {
+    const M = monthData(String(t.value || S.inc.t).slice(0, 7));
+    const old = S.inc.id ? (D.inc.find(i => i.id === S.inc.id) || {}).amt || 0 : 0;
+    const el = $('#iAfter b'); if (el) el.textContent = rp(M.masuk - old + num(($('#iAmt') || {}).value));
+  }
 });
 document.addEventListener('input', e => {
   const t = e.target;
